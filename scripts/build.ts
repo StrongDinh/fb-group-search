@@ -3,8 +3,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 const SRC = path.resolve(__dirname, "../src/bookmarklet.ts");
-const OUT_DIR = path.resolve(__dirname, "../public");
-const HTML_TEMPLATE = path.resolve(__dirname, "../public/index.html");
+const OUT_DIR = path.resolve(__dirname, "../docs");
+const HTML_TEMPLATE = path.resolve(__dirname, "../docs/index.html");
 
 async function build() {
   // Ensure output dir exists
@@ -30,14 +30,14 @@ async function build() {
 
   // 3. Write raw bookmarklet file
   fs.writeFileSync(path.join(OUT_DIR, "bookmarklet.js"), bookmarklet);
-  console.log("  → public/bookmarklet.js");
+  console.log("  → docs/bookmarklet.js");
 
   // 4. Generate index.html
   const html = generateHTML(bookmarklet);
   fs.writeFileSync(HTML_TEMPLATE, html);
-  console.log("  → public/index.html");
+  console.log("  → docs/index.html");
 
-  console.log("Done! Open public/index.html to test.");
+  console.log("Done! Open docs/index.html to test.");
 }
 
 function generateHTML(bookmarklet: string): string {
