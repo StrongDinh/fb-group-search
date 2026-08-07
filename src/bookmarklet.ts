@@ -1,15 +1,20 @@
 // ==UserScript==
 // @name         FB Group Search - Quét bài viết Facebook Group
 // @namespace    https://strongdinh.github.io/fb-group-search/
-// @version      1.0
+// @version      1.1
 // @description  Quét bài viết Facebook Group, lọc theo từ khoá, trích xuất SĐT & link
 // @author       StrongDinh
-// @match        https://www.facebook.com/groups/*
+// @match        https://www.facebook.com/*
+// @match        https://web.facebook.com/*
+// @match        https://*.facebook.com/*
+// @include      /^https?:\/\/(www\.|web\.|mbasic\.)?facebook\.com\/.*/
 // @grant        none
 // ==/UserScript==
 
 (function () {
   "use strict";
+  console.log("%c[FB Group Search] Script loaded!", "color: green; font-size: 16px; font-weight: bold;");
+  console.log("[FB Group Search] Current URL:", window.location.href);
 
   // ── Configuration ──
   const DEFAULT_KEYWORDS = [
@@ -290,6 +295,17 @@
 
   // ── Floating button ──
   function addFloatingButton() {
+    if (document.getElementById("fbgs-btn-container")) return;
+    console.log("[FB Group Search] Adding button...");
+
+    // Inject keyframe animation
+    if (!document.getElementById("fbgs-style")) {
+      const style = document.createElement("style");
+      style.id = "fbgs-style";
+      style.textContent = "@keyframes fbgs-pulse{0%,100%{box-shadow:0 4px 20px rgba(228,30,63,0.5)}50%{box-shadow:0 4px 30px rgba(228,30,63,0.9)}}";
+      document.head.appendChild(style);
+    }
+
     const container = document.createElement("div");
     container.id = "fbgs-btn-container";
     container.style.cssText = `
@@ -298,9 +314,10 @@
     const btn = document.createElement("button");
     btn.textContent = "🔍 Quét Group";
     btn.style.cssText = `
-      padding:12px 24px;background:#1877f2;color:#fff;border:none;border-radius:24px;
-      font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(24,119,242,0.4);
+      padding:14px 28px;background:#e41e3f;color:#fff;border:none;border-radius:24px;
+      font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(228,30,63,0.5);
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      animation: fbgs-pulse 1.5s ease-in-out infinite;
     `;
     btn.onclick = startScan;
     container.appendChild(btn);
