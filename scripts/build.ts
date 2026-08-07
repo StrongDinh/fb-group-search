@@ -1,17 +1,50 @@
 import * as esbuild from "esbuild";
 import * as fs from "fs";
 import * as path from "path";
+import { execSync } from "child_process";
 
-const SRC = path.resolve(__dirname, "../src/bookmarklet.ts");
-const OUT_DIR = path.resolve(__dirname, "../docs");
+const SRC_BOOKMARKLET = path.resolve(__dirname, "../src/bookmarklet.ts");
+const SRC_CONTENT = path.resolve(__dirname, "../src/content.ts");
+const DOCS_DIR = path.resolve(__dirname, "../docs");
+const EXT_DIR = path.resolve(__dirname, "../extension");
+const ICONS_DIR = path.resolve(EXT_DIR, "icons");
 
 async function build() {
-  if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
+  // Ensure dirs
+  for (const d of [DOCS_DIR, EXT_DIR, ICONS_DIR]) {
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  }
 
-  // 1. Bundle with esbuild
-  console.log("Building userscript...");
-  const result = await esbuild.build({
-    entryPoints: [SRC],
+  // 1. Build content script (extension)
+  console.log("Building extension content script...");
+  const contentResult = await esbuild.build({
+    entryPoints: [SRC_CONTENT],
+    bundle: true,
+    minify: true,
+    target: "es2017",
+    format: "iife",
+    write: false,
+    outfile: "content.js",
+  });
+  const contentPath = path.join(EXT_DIR, "content.js");
+  fs.writeFileSync(contentPath, contentResult.outputFiles![0].text);
+  console.log(`  → extension/content.js (${contentResult.outputFiles![0].text.length} chars)`);
+
+  // 2. Copy manifest.json to extension/ (if source exists)
+  const manifestSrc = path.resolve(__dirname, "../extension/manifest.json");
+  // manifest.json already lives in extension/, no need to copy
+
+  // 3. Generate icons
+  console.log("Generating icons...");
+  execSync("npx ts-node scripts/generate-icons.ts", {
+    cwd: path.resolve(__dirname, ".."),
+    stdio: "pipe",
+  });
+
+  // 4. Build legacy userscript (bookmarklet → docs/)
+  console.log("Building userscript (legacy)...");
+  const bmResult = await esbuild.build({
+    entryPoints: [SRC_BOOKMARKLET],
     bundle: true,
     minify: false,
     target: "es2017",
@@ -20,29 +53,37 @@ async function build() {
     outfile: "bookmarklet.js",
   });
 
-  let code = result.outputFiles![0].text;
+  let bmCode = bmResult.outputFiles![0].text;
 
-  // 2. Extract Tampermonkey header from source & prepend to bundled code
-  const srcRaw = fs.readFileSync(SRC, "utf-8");
+  // Extract Tampermonkey header from source & prepend to bundled code
+  const srcRaw = fs.readFileSync(SRC_BOOKMARKLET, "utf-8");
   const headerMatch = srcRaw.match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/);
   if (headerMatch) {
-    code = headerMatch[0] + "\n" + code;
+    bmCode = headerMatch[0] + "\n" + bmCode;
   }
+  const bmPath = path.join(DOCS_DIR, "fb-group-search.user.js");
+  fs.writeFileSync(bmPath, bmCode);
+  console.log(`  → docs/fb-group-search.user.js (${bmCode.length} chars)`);
 
-  // 3. Write userscript file
-  const outPath = path.join(OUT_DIR, "fb-group-search.user.js");
-  fs.writeFileSync(outPath, code);
-  console.log(`  → docs/fb-group-search.user.js (${code.length} chars)`);
-
-  // 4. Generate landing page
-  const html = generateHTML();
-  fs.writeFileSync(path.join(OUT_DIR, "index.html"), html);
+  // 5. Generate landing page
+  console.log("Generating landing page...");
+  const html = generateLandingPage();
+  fs.writeFileSync(path.join(DOCS_DIR, "index.html"), html);
   console.log("  → docs/index.html");
 
-  console.log("Done!");
+  // 6. Package extension as .zip for distribution
+  console.log("Packaging extension...");
+  const zipPath = path.join(DOCS_DIR, "fb-group-search.zip");
+  execSync("cd \"" + EXT_DIR + "\" && zip -r \"" + zipPath + "\" . -x \"*.DS_Store\"", { stdio: "pipe" });
+  console.log("  → docs/fb-group-search.zip (" + fs.statSync(zipPath).size + " bytes)");
+
+  console.log("\n✅ Build complete!");
+  console.log("   extension/ → Load unpacked in chrome://extensions");
+  console.log("   docs/      → Deploy to GitHub Pages");
+  console.log("   docs/fb-group-search.zip → Tải về cài thủ công");
 }
 
-function generateHTML(): string {
+function generateLandingPage(): string {
   return `<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -55,7 +96,7 @@ function generateHTML(): string {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #f0f2f5; color: #1c1e21; line-height: 1.6;
     }
-    .container { max-width: 700px; margin: 0 auto; padding: 40px 20px; }
+    .container { max-width: 720px; margin: 0 auto; padding: 40px 20px; }
     .hero {
       background: linear-gradient(135deg, #1877f2 0%, #42b72a 100%);
       color: #fff; padding: 48px 32px; border-radius: 16px;
@@ -63,30 +104,39 @@ function generateHTML(): string {
     }
     .hero h1 { font-size: 28px; margin-bottom: 8px; }
     .hero p { font-size: 16px; opacity: 0.9; }
-    .install-box {
-      background: #fff; border-radius: 12px; padding: 32px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-      text-align: center; margin-bottom: 24px;
+    .hero .version {
+      display: inline-block; background: rgba(255,255,255,0.2);
+      padding: 4px 12px; border-radius: 20px; font-size: 13px;
+      margin-top: 12px;
     }
-    .install-box h2 { font-size: 20px; margin-bottom: 8px; }
-    .install-box .url-display {
-      background: #f0f2f5; padding: 12px; border-radius: 8px;
-      font-family: monospace; font-size: 14px; word-break: break-all;
-      margin: 16px 0; color: #1877f2;
-    }
-    .install-btn {
-      display: inline-block; padding: 16px 40px;
-      background: #1877f2; color: #fff; border-radius: 8px;
-      font-size: 18px; font-weight: 700; text-decoration: none;
-      box-shadow: 0 4px 12px rgba(24,119,242,0.4);
-      transition: transform 0.15s;
-    }
-    .install-btn:hover { transform: scale(1.05); }
-    .steps {
+
+    .section {
       background: #fff; border-radius: 12px; padding: 32px;
       box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 24px;
     }
-    .steps h2 { font-size: 20px; margin-bottom: 16px; }
+    .section h2 { font-size: 20px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+    .badge {
+      display: inline-block; padding: 4px 10px; border-radius: 6px;
+      font-size: 12px; font-weight: 700;
+    }
+    .badge-free { background: #e7f3ff; color: #1877f2; }
+    .badge-best { background: #e6f9e6; color: #42b72a; }
+
+    .install-btn {
+      display: inline-block; padding: 16px 40px;
+      background: linear-gradient(135deg, #1877f2, #0d6efd); color: #fff;
+      border-radius: 8px; font-size: 18px; font-weight: 700;
+      text-decoration: none; box-shadow: 0 4px 12px rgba(24,119,242,0.4);
+      transition: transform 0.15s; margin: 8px;
+    }
+    .install-btn:hover { transform: scale(1.05); }
+    .install-btn.edge {
+      background: linear-gradient(135deg, #0078d4, #00bcf2);
+      box-shadow: 0 4px 12px rgba(0,120,212,0.4);
+    }
+
+    .steps { }
     .step { display: flex; align-items: flex-start; margin-bottom: 16px; gap: 12px; }
     .step-num {
       background: #1877f2; color: #fff; width: 28px; height: 28px;
@@ -94,24 +144,30 @@ function generateHTML(): string {
       justify-content: center; font-weight: 700; font-size: 14px;
       flex-shrink: 0;
     }
-    .step-content { font-size: 15px; }
+    .step-content { font-size: 15px; line-height: 1.5; }
     .step-content strong { color: #1877f2; }
-    .features {
-      background: #fff; border-radius: 12px; padding: 32px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 24px;
+    .step-content code {
+      background: #f0f2f5; padding: 2px 6px; border-radius: 4px;
+      font-size: 13px; font-family: monospace;
     }
-    .features h2 { font-size: 20px; margin-bottom: 16px; }
+
     .features ul { list-style: none; }
     .features li { padding: 8px 0; font-size: 15px; }
     .features li::before { content: "✅ "; }
-    .warning {
-      background: #fff3cd; border: 1px solid #f5d23e;
-      border-radius: 8px; padding: 16px; margin-bottom: 24px; font-size: 13px;
+
+    .alert {
+      border-radius: 8px; padding: 16px; margin-bottom: 24px; font-size: 14px;
     }
+    .alert-info { background: #e7f3ff; border: 1px solid #1877f2; }
+    .alert-warn { background: #fff3cd; border: 1px solid #f5d23e; }
+
     footer { text-align: center; font-size: 13px; color: #8a8d91; padding: 24px 0; }
+    footer a { color: #1877f2; }
+
     @media (max-width: 480px) {
       .hero { padding: 32px 20px; }
       .hero h1 { font-size: 22px; }
+      .install-btn { display: block; margin: 8px 0; }
     }
   </style>
 </head>
@@ -120,53 +176,108 @@ function generateHTML(): string {
     <div class="hero">
       <h1>🔍 FB Group Search</h1>
       <p>Quét bài viết Facebook Group, tìm khách hàng tiềm năng tự động</p>
+      <div class="version">v1.0.0</div>
     </div>
 
-    <div class="install-box">
-      <h2>📥 Cài đặt (chỉ 1 lần)</h2>
-      <p style="color:#65676b;margin-bottom:12px;">
-        1. Cài extension <strong>Tampermonkey</strong> trên Chrome/Edge
+    <!-- CÀI ĐẶT CHÍNH: Edge Add-ons -->
+    <div class="section" style="border: 2px solid #00bcf2;">
+      <h2>
+        🚀 Cách 1: Cài từ Edge Add-ons (khuyên dùng)
+        <span class="badge badge-best">1-CLICK</span>
+        <span class="badge badge-free">MIỄN PHÍ</span>
+      </h2>
+      <p style="margin-bottom:16px;color:#65676b;">
+        Cài đặt 1 click, không cần Developer Mode, tự động cập nhật.
+        <strong>Có sẵn trên mọi máy Windows 10/11.</strong>
       </p>
-      <p style="color:#65676b;margin-bottom:12px;">
-        2. Mở link bên dưới → Tampermonkey sẽ tự hiện popup cài đặt
-      </p>
-      <div class="url-display">
-        strongdinh.github.io/fb-group-search/fb-group-search.user.js
+      <div style="text-align:center;">
+        <a class="install-btn edge" href="https://microsoftedge.microsoft.com/addons/detail/fb-group-search" target="_blank">
+          🛒 Cài từ Edge Add-ons
+        </a>
       </div>
-      <a class="install-btn" href="fb-group-search.user.js">
-        ⚡ Cài đặt Script
-      </a>
+      <div class="alert alert-info" style="margin-top:16px;">
+        ⚡ Link Edge Add-ons sẽ có sau khi extension được duyệt (1-3 ngày).
+        Trong lúc chờ, dùng <strong>Cách 2</strong> bên dưới.
+      </div>
     </div>
 
-    <div class="warning">
-      ⚠️ <strong>Yêu cầu:</strong> Cần cài extension <strong><a href="https://www.tampermonkey.net/" target="_blank">Tampermonkey</a></strong> (Chrome/Edge/Firefox) trước khi click nút "Cài đặt Script".
+    <!-- CÁCH 2: Chrome / Edge thủ công -->
+    <div class="section">
+      <h2>
+        🛠 Cách 2: Cài thủ công (Chrome / Edge)
+        <span class="badge badge-free">MIỄN PHÍ</span>
+      </h2>
+      <p style="margin-bottom:16px;color:#65676b;">
+        Dành cho người dùng Chrome, hoặc muốn cài ngay không cần chờ duyệt.
+      </p>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <strong>Tải file ZIP</strong> từ
+            <a href="https://github.com/StrongDinh/fb-group-search/releases/latest" target="_blank">GitHub Releases</a>
+            → chọn file <code>fb-group-search-vX.X.X.zip</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <strong>Giải nén</strong> file ZIP ra 1 folder (click phải → Extract All)
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            Mở <strong><code>chrome://extensions</code></strong> (Chrome) hoặc <strong><code>edge://extensions</code></strong> (Edge)
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            Bật <strong>Developer mode</strong> (góc phải) → Click <strong>Load unpacked</strong> → Chọn folder vừa giải nén
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            ✅ Xong! Vào Facebook Group bất kỳ → thấy nút <strong>🔍 Quét Group</strong> góc phải dưới
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div class="steps">
+    <!-- CÁCH SỬ DỤNG -->
+    <div class="section">
       <h2>📖 Cách sử dụng</h2>
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-content">
-          <strong>Cài Tampermonkey + Script</strong> (chỉ 1 lần đầu)<br>
-          Cài Tampermonkey từ Chrome Web Store, sau đó click nút "Cài đặt Script" ở trên
+          <strong>Vào Facebook Group</strong> bất kỳ mà bạn là thành viên
         </div>
       </div>
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-content">
-          <strong>Mở Facebook Group</strong> bất kỳ mà bạn là thành viên<br>
-          Bạn sẽ thấy nút <strong>"🔍 Quét Group"</strong> màu xanh ở góc phải bên dưới màn hình
+          Nhìn góc phải dưới màn hình → Click nút <strong>🔍</strong> màu xanh
         </div>
       </div>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-content">
-          <strong>Click nút "🔍 Quét Group"</strong> → Nhập từ khoá → Tool tự động quét & hiện kết quả!
+          Nhập từ khoá cần tìm (phân cách bằng dấu phẩy) → Click <strong>"🚀 Bắt đầu quét"</strong>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          Xem kết quả → Click <strong>"📥 Tải Excel"</strong> để xuất file CSV
         </div>
       </div>
     </div>
 
-    <div class="features">
+    <!-- TÍNH NĂNG -->
+    <div class="section features">
       <h2>✨ Tính năng</h2>
       <ul>
         <li>Tự động scroll & quét tất cả bài viết trong group</li>
@@ -174,13 +285,27 @@ function generateHTML(): string {
         <li>Tự động trích xuất <strong>số điện thoại</strong> từ nội dung</li>
         <li>Lấy <strong>link profile</strong> người đăng</li>
         <li>Lấy <strong>link bài viết</strong> gốc</li>
-        <li>Xuất kết quả ra <strong>file Excel (.csv)</strong></li>
+        <li>Xuất kết quả ra <strong>file Excel (.csv)</strong> — mở được bằng Excel, Google Sheets</li>
         <li>Popup hiển thị ngay trên Facebook, không rời trang</li>
       </ul>
     </div>
 
+    <!-- FAQ -->
+    <div class="section">
+      <h2>❓ Câu hỏi thường gặp</h2>
+      <p style="margin-bottom:12px;"><strong>Có bị Facebook khoá tài khoản không?</strong><br>
+      <span style="color:#65676b;">Không. Extension chỉ đọc dữ liệu hiển thị trên màn hình (DOM scraping), không can thiệp vào hệ thống Facebook.</span></p>
+
+      <p style="margin-bottom:12px;"><strong>Có cần đăng nhập không?</strong><br>
+      <span style="color:#65676b;">Có — bạn phải đăng nhập Facebook và là thành viên của group muốn quét.</span></p>
+
+      <p><strong>Extension có an toàn không?</strong><br>
+      <span style="color:#65676b;">Có. Mã nguồn công khai trên GitHub, không gửi dữ liệu đi đâu, chỉ chạy trên máy bạn.</span></p>
+    </div>
+
     <footer>
-      FB Group Search — Công cụ miễn phí · <a href="https://github.com/StrongDinh/fb-group-search" target="_blank">Mã nguồn GitHub</a>
+      FB Group Search — Công cụ miễn phí ·
+      <a href="https://github.com/StrongDinh/fb-group-search" target="_blank">Mã nguồn GitHub</a>
     </footer>
   </div>
 </body>

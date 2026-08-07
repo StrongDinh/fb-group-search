@@ -1,10 +1,12 @@
 {
   "name": "fb-group-search",
   "version": "1.0.0",
-  "description": "Bookmarklet quét bài Facebook group, tìm keyword, xuất Excel",
+  "description": "Extension quét bài Facebook group, tìm keyword, xuất Excel",
   "scripts": {
     "build": "ts-node scripts/build.ts",
-    "dev": "npx serve public"
+    "dev": "npx serve docs",
+    "icons": "ts-node scripts/generate-icons.ts",
+    "zip": "cd extension && zip -r ../fb-group-search-v1.0.0.zip . -x '*.DS_Store'"
   },
   "license": "MIT",
   "devDependencies": {
