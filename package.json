@@ -1,0 +1,16 @@
+{
+  "name": "fb-group-search",
+  "version": "1.0.0",
+  "description": "Bookmarklet quét bài Facebook group, tìm keyword, xuất Excel",
+  "scripts": {
+    "build": "ts-node scripts/build.ts",
+    "dev": "npx serve public"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "esbuild": "^0.23.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0"
+  }
+}
