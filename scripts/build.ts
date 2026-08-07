@@ -5,7 +5,6 @@ import * as path from "path";
 const SRC = path.resolve(__dirname, "../src/bookmarklet.ts");
 const OUT_DIR = path.resolve(__dirname, "../docs");
 const HTML_TEMPLATE = path.resolve(__dirname, "../docs/index.html");
-const JS_URL = "https://strongdinh.github.io/fb-group-search/bookmarklet.js";
 
 async function build() {
   if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -24,23 +23,23 @@ async function build() {
 
   const code = result.outputFiles![0].text;
 
-  // 2. Write raw JS to docs/ (loaded dynamically by bookmarklet loader)
+  // 2. Full inline bookmarklet (bypass CSP)
+  const bookmarklet = "javascript:(function(){" + code + "})();";
+  console.log(`  Bookmarklet size: ${bookmarklet.length} chars`);
+
+  // 3. Also write raw JS to docs/ (useful for dev)
   fs.writeFileSync(path.join(OUT_DIR, "bookmarklet.js"), code);
-  console.log(`  → docs/bookmarklet.js (${code.length} chars)`);
+  console.log("  → docs/bookmarklet.js");
 
-  // 3. Short bookmarklet loader (~150 chars only)
-  const loader = `javascript:(function(){var s=document.createElement('script');s.src='${JS_URL}';document.body.appendChild(s);})();`;
-  console.log(`  Loader: ${loader.length} chars`);
-
-  // 4. Generate index.html
-  const html = generateHTML(loader);
+  // 4. Generate index.html with full inline bookmarklet
+  const html = generateHTML(bookmarklet);
   fs.writeFileSync(HTML_TEMPLATE, html);
   console.log("  → docs/index.html");
 
   console.log("Done!");
 }
 
-function generateHTML(loader: string): string {
+function generateHTML(bookmarklet: string): string {
   return `<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -76,9 +75,7 @@ function generateHTML(loader: string): string {
     }
     .bookmarklet-btn:hover { transform: scale(1.05); }
     .bookmarklet-btn:active { cursor: grabbing; }
-    .drag-hint {
-      margin-top: 12px; font-size: 14px; color: #65676b;
-    }
+    .drag-hint { margin-top: 12px; font-size: 14px; color: #65676b; }
     .steps {
       background: #fff; border-radius: 12px; padding: 32px;
       box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 24px;
@@ -122,7 +119,7 @@ function generateHTML(loader: string): string {
 
     <div class="bookmarklet-box">
       <h2>👉 Kéo nút này lên thanh Bookmarks</h2>
-      <a class="bookmarklet-btn" href="${loader}" onclick="return false;">
+      <a class="bookmarklet-btn" href="${bookmarklet}" onclick="return false;">
         🔍 Quét Group
       </a>
       <div class="drag-hint">
