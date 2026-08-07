@@ -262,52 +262,26 @@
       container.appendChild(btn);
       document.body.appendChild(container);
     }
-    let lastPath = "";
-    function init() {
-      const isGroupPage = window.location.pathname.includes("/groups/");
-      if (!isGroupPage) {
-        removeOverlay();
-        return;
-      }
-      if (lastPath !== window.location.pathname) {
-        lastPath = window.location.pathname;
-        if (!document.getElementById("fbgs-btn-container")) {
-          addFloatingButton();
-        }
-      }
+    function isGroupPage() {
+      return window.location.pathname.includes("/groups/");
     }
-    function watchNavigation() {
-      const origPush = history.pushState;
-      const origReplace = history.replaceState;
-      function onNav() {
-        setTimeout(init, 500);
+    function init() {
+      var _a;
+      if (isGroupPage() && !document.getElementById("fbgs-btn-container")) {
+        addFloatingButton();
       }
-      history.pushState = function(...args) {
-        origPush.apply(this, args);
-        onNav();
-      };
-      history.replaceState = function(...args) {
-        origReplace.apply(this, args);
-        onNav();
-      };
-      window.addEventListener("popstate", () => setTimeout(init, 500));
-      const titleEl = document.querySelector("title");
-      if (titleEl) {
-        new MutationObserver(() => {
-          if (window.location.pathname.includes("/groups/") && !document.getElementById("fbgs-btn-container")) {
-            addFloatingButton();
-          }
-        }).observe(titleEl, { childList: true });
+      if (!isGroupPage()) {
+        (_a = document.getElementById("fbgs-btn-container")) == null ? void 0 : _a.remove();
       }
     }
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", () => {
-        watchNavigation();
         init();
+        setInterval(init, 2e3);
       });
     } else {
-      watchNavigation();
       init();
+      setInterval(init, 2e3);
     }
   })();
 })();

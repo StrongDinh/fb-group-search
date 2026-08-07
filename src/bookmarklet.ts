@@ -308,48 +308,28 @@
   }
 
   // ── Init ──
-  let lastPath = "";
+  function isGroupPage(): boolean {
+    return window.location.pathname.includes("/groups/");
+  }
+
   function init() {
-    const isGroupPage = window.location.pathname.includes("/groups/");
-    if (!isGroupPage) {
-      removeOverlay();
-      return;
+    if (isGroupPage() && !document.getElementById("fbgs-btn-container")) {
+      addFloatingButton();
     }
-    // Only re-add if path changed (SPA nav) or first load
-    if (lastPath !== window.location.pathname) {
-      lastPath = window.location.pathname;
-      if (!document.getElementById("fbgs-btn-container")) {
-        addFloatingButton();
-      }
+    if (!isGroupPage()) {
+      // Remove button if navigated away from group
+      document.getElementById("fbgs-btn-container")?.remove();
     }
   }
 
-  // Watch for SPA navigation (Facebook doesn't reload page)
-  function watchNavigation() {
-    // Hook history.pushState / replaceState
-    const origPush = history.pushState;
-    const origReplace = history.replaceState;
-    function onNav() {
-      setTimeout(init, 500);
-    }
-    history.pushState = function(...args) { origPush.apply(this, args); onNav(); };
-    history.replaceState = function(...args) { origReplace.apply(this, args); onNav(); };
-    window.addEventListener("popstate", () => setTimeout(init, 500));
-    // Also observe URL changes via MutationObserver on title
-    const titleEl = document.querySelector("title");
-    if (titleEl) {
-      new MutationObserver(() => {
-        if (window.location.pathname.includes("/groups/") && !document.getElementById("fbgs-btn-container")) {
-          addFloatingButton();
-        }
-      }).observe(titleEl, { childList: true });
-    }
-  }
-
+  // Simple polling — most reliable for SPA like Facebook
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => { watchNavigation(); init(); });
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      setInterval(init, 2000); // Check every 2 seconds
+    });
   } else {
-    watchNavigation();
     init();
+    setInterval(init, 2000);
   }
 })();
