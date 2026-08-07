@@ -45,7 +45,7 @@ function getGroupId(): string {
 // Facebook search result post container selector
 const POST_SEL = "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl";
 
-// 1. Search những node có "Bình luận" → xác định post
+// 1. Search những node có "Bình luận" → xác định post (lấy hết tất cả)
 function getPosts(): Element[] {
   const candidates = [...document.querySelectorAll(POST_SEL)];
   const postCandidates = candidates.filter(el => {
@@ -340,23 +340,19 @@ async function runOnSearch(kwsOverride?: string[]) {
       seenPermalinks.add(permalink);
       newInThisRound++;
 
-      // Clean text cho phone regex + keyword matching + content
+      // Clean text cho phone regex + content
       const cleanedText = cleanText(rawText);
 
       // ── 4. Regex phone ──
       const phones = extractPhones(cleanedText);
 
-      // ── 5. Match keyword ──
-      const kw = matchKw(cleanedText, kws);
-      if (!kw) continue;
-
       // ── Lấy author + time ──
       const author = extractAuthor(postEl, groupId);
       const time = extractTime(cleanedText);
 
-      // ── 6. Lưu kết quả ──
+      // ── 5. Lưu kết quả (lấy hết sạch, không lọc keyword) ──
       results.push({
-        keyword: kw,
+        keyword: kws.join(", "),
         authorName: author.name || "(không rõ)",
         authorProfile: author.profile || "",
         permalink,
@@ -365,9 +361,9 @@ async function runOnSearch(kwsOverride?: string[]) {
         time: time || "",
       });
 
-      // Debug first 5 matched
+      // Debug first 5
       if (results.length <= 5) {
-        console.log("[FBGS] #" + results.length + " matched: kw=" + kw + " author=" + author.name + " phones=" + phones.join(",") + " permalink=" + permalink.slice(0, 60));
+        console.log("[FBGS] #" + results.length + " author=" + author.name + " phones=" + phones.join(",") + " permalink=" + permalink.slice(0, 60));
         console.log("  raw[" + rawText.length + "]: " + rawText.slice(0, 200));
         const stripped = stripFBChrome(cleanedText);
         console.log("  content[" + stripped.length + "]: " + stripped.slice(0, 250));
@@ -379,7 +375,7 @@ async function runOnSearch(kwsOverride?: string[]) {
     else stableCount = 0;
 
     scrollCount++;
-    progress(ov, "Đang quét... (scroll " + scrollCount + ", " + results.length + " khớp, " + seenPermalinks.size + " bài)");
+    progress(ov, "Đang quét... (scroll " + scrollCount + ", " + results.length + " bài, " + seenPermalinks.size + " tổng)");
 
     // ── 7. Scroll để load DOM mới ──
     window.scrollTo(0, document.body.scrollHeight);
