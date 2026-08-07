@@ -262,13 +262,51 @@
       container.appendChild(btn);
       document.body.appendChild(container);
     }
+    let lastPath = "";
     function init() {
-      if (!window.location.pathname.includes("/groups/")) return;
-      addFloatingButton();
+      const isGroupPage = window.location.pathname.includes("/groups/");
+      if (!isGroupPage) {
+        removeOverlay();
+        return;
+      }
+      if (lastPath !== window.location.pathname) {
+        lastPath = window.location.pathname;
+        if (!document.getElementById("fbgs-btn-container")) {
+          addFloatingButton();
+        }
+      }
+    }
+    function watchNavigation() {
+      const origPush = history.pushState;
+      const origReplace = history.replaceState;
+      function onNav() {
+        setTimeout(init, 500);
+      }
+      history.pushState = function(...args) {
+        origPush.apply(this, args);
+        onNav();
+      };
+      history.replaceState = function(...args) {
+        origReplace.apply(this, args);
+        onNav();
+      };
+      window.addEventListener("popstate", () => setTimeout(init, 500));
+      const titleEl = document.querySelector("title");
+      if (titleEl) {
+        new MutationObserver(() => {
+          if (window.location.pathname.includes("/groups/") && !document.getElementById("fbgs-btn-container")) {
+            addFloatingButton();
+          }
+        }).observe(titleEl, { childList: true });
+      }
     }
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", init);
+      document.addEventListener("DOMContentLoaded", () => {
+        watchNavigation();
+        init();
+      });
     } else {
+      watchNavigation();
       init();
     }
   })();
