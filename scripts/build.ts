@@ -4,42 +4,45 @@ import * as path from "path";
 
 const SRC = path.resolve(__dirname, "../src/bookmarklet.ts");
 const OUT_DIR = path.resolve(__dirname, "../docs");
-const HTML_TEMPLATE = path.resolve(__dirname, "../docs/index.html");
 
 async function build() {
   if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  // 1. Bundle & minify
-  console.log("Building bookmarklet...");
+  // 1. Bundle with esbuild
+  console.log("Building userscript...");
   const result = await esbuild.build({
     entryPoints: [SRC],
     bundle: true,
-    minify: true,
+    minify: false,
     target: "es2017",
     format: "iife",
     write: false,
     outfile: "bookmarklet.js",
   });
 
-  const code = result.outputFiles![0].text;
+  let code = result.outputFiles![0].text;
 
-  // 2. Full inline bookmarklet (bypass CSP)
-  const bookmarklet = "javascript:(function(){" + code + "})();";
-  console.log(`  Bookmarklet size: ${bookmarklet.length} chars`);
+  // 2. Extract Tampermonkey header from source & prepend to bundled code
+  const srcRaw = fs.readFileSync(SRC, "utf-8");
+  const headerMatch = srcRaw.match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/);
+  if (headerMatch) {
+    code = headerMatch[0] + "\n" + code;
+  }
 
-  // 3. Also write raw JS to docs/ (useful for dev)
-  fs.writeFileSync(path.join(OUT_DIR, "bookmarklet.js"), code);
-  console.log("  → docs/bookmarklet.js");
+  // 3. Write userscript file
+  const outPath = path.join(OUT_DIR, "fb-group-search.user.js");
+  fs.writeFileSync(outPath, code);
+  console.log(`  → docs/fb-group-search.user.js (${code.length} chars)`);
 
-  // 4. Generate index.html with full inline bookmarklet
-  const html = generateHTML(bookmarklet);
-  fs.writeFileSync(HTML_TEMPLATE, html);
+  // 4. Generate landing page
+  const html = generateHTML();
+  fs.writeFileSync(path.join(OUT_DIR, "index.html"), html);
   console.log("  → docs/index.html");
 
   console.log("Done!");
 }
 
-function generateHTML(bookmarklet: string): string {
+function generateHTML(): string {
   return `<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -60,22 +63,25 @@ function generateHTML(bookmarklet: string): string {
     }
     .hero h1 { font-size: 28px; margin-bottom: 8px; }
     .hero p { font-size: 16px; opacity: 0.9; }
-    .bookmarklet-box {
+    .install-box {
       background: #fff; border-radius: 12px; padding: 32px;
       box-shadow: 0 2px 12px rgba(0,0,0,0.08);
       text-align: center; margin-bottom: 24px;
     }
-    .bookmarklet-box h2 { font-size: 20px; margin-bottom: 16px; }
-    .bookmarklet-btn {
+    .install-box h2 { font-size: 20px; margin-bottom: 8px; }
+    .install-box .url-display {
+      background: #f0f2f5; padding: 12px; border-radius: 8px;
+      font-family: monospace; font-size: 14px; word-break: break-all;
+      margin: 16px 0; color: #1877f2;
+    }
+    .install-btn {
       display: inline-block; padding: 16px 40px;
       background: #1877f2; color: #fff; border-radius: 8px;
       font-size: 18px; font-weight: 700; text-decoration: none;
-      cursor: grab; box-shadow: 0 4px 12px rgba(24,119,242,0.4);
-      transition: transform 0.15s; user-select: none;
+      box-shadow: 0 4px 12px rgba(24,119,242,0.4);
+      transition: transform 0.15s;
     }
-    .bookmarklet-btn:hover { transform: scale(1.05); }
-    .bookmarklet-btn:active { cursor: grabbing; }
-    .drag-hint { margin-top: 12px; font-size: 14px; color: #65676b; }
+    .install-btn:hover { transform: scale(1.05); }
     .steps {
       background: #fff; border-radius: 12px; padding: 32px;
       box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 24px;
@@ -98,12 +104,11 @@ function generateHTML(bookmarklet: string): string {
     .features ul { list-style: none; }
     .features li { padding: 8px 0; font-size: 15px; }
     .features li::before { content: "✅ "; }
-    footer { text-align: center; font-size: 13px; color: #8a8d91; padding: 24px 0; }
-    .video-hint {
-      margin-top: 16px; padding: 12px; background: #fffbe6;
-      border: 1px solid #f5d23e; border-radius: 8px; font-size: 13px;
+    .warning {
+      background: #fff3cd; border: 1px solid #f5d23e;
+      border-radius: 8px; padding: 16px; margin-bottom: 24px; font-size: 13px;
     }
-    .video-hint strong { color: #e67e22; }
+    footer { text-align: center; font-size: 13px; color: #8a8d91; padding: 24px 0; }
     @media (max-width: 480px) {
       .hero { padding: 32px 20px; }
       .hero h1 { font-size: 22px; }
@@ -117,43 +122,46 @@ function generateHTML(bookmarklet: string): string {
       <p>Quét bài viết Facebook Group, tìm khách hàng tiềm năng tự động</p>
     </div>
 
-    <div class="bookmarklet-box">
-      <h2>👉 Kéo nút này lên thanh Bookmarks</h2>
-      <a class="bookmarklet-btn" href="${bookmarklet}" onclick="return false;">
-        🔍 Quét Group
+    <div class="install-box">
+      <h2>📥 Cài đặt (chỉ 1 lần)</h2>
+      <p style="color:#65676b;margin-bottom:12px;">
+        1. Cài extension <strong>Tampermonkey</strong> trên Chrome/Edge
+      </p>
+      <p style="color:#65676b;margin-bottom:12px;">
+        2. Mở link bên dưới → Tampermonkey sẽ tự hiện popup cài đặt
+      </p>
+      <div class="url-display">
+        strongdinh.github.io/fb-group-search/fb-group-search.user.js
+      </div>
+      <a class="install-btn" href="fb-group-search.user.js">
+        ⚡ Cài đặt Script
       </a>
-      <div class="drag-hint">
-        🖱️ <strong>Click giữ & kéo thả</strong> nút này lên thanh dấu trang (bookmarks bar) của trình duyệt
-      </div>
-      <div class="video-hint">
-        <strong>💡 Nếu chưa thấy thanh Bookmarks:</strong><br>
-        • Chrome: Nhấn <strong>Ctrl+Shift+B</strong> (Windows) hoặc <strong>Cmd+Shift+B</strong> (Mac)<br>
-        • Edge: Nhấn <strong>Ctrl+Shift+B</strong><br>
-        • Safari: Vào View → Show Favorites Bar
-      </div>
+    </div>
+
+    <div class="warning">
+      ⚠️ <strong>Yêu cầu:</strong> Cần cài extension <strong><a href="https://www.tampermonkey.net/" target="_blank">Tampermonkey</a></strong> (Chrome/Edge/Firefox) trước khi click nút "Cài đặt Script".
     </div>
 
     <div class="steps">
-      <h2>📖 Cách sử dụng (chỉ 3 bước)</h2>
+      <h2>📖 Cách sử dụng</h2>
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-content">
-          <strong>Kéo nút "Quét Group" lên Bookmarks Bar</strong><br>
-          (chỉ cần làm 1 lần duy nhất)
+          <strong>Cài Tampermonkey + Script</strong> (chỉ 1 lần đầu)<br>
+          Cài Tampermonkey từ Chrome Web Store, sau đó click nút "Cài đặt Script" ở trên
         </div>
       </div>
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-content">
           <strong>Mở Facebook Group</strong> bất kỳ mà bạn là thành viên<br>
-          Ví dụ: group thuê mặt bằng, group bất động sản, group mua bán...
+          Bạn sẽ thấy nút <strong>"🔍 Quét Group"</strong> màu xanh ở góc phải bên dưới màn hình
         </div>
       </div>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-content">
-          <strong>Click vào bookmark "Quét Group"</strong><br>
-          Nhập từ khoá (vd: cần thuê, cần tìm, sang nhượng...) → tool tự quét & hiện kết quả!
+          <strong>Click nút "🔍 Quét Group"</strong> → Nhập từ khoá → Tool tự động quét & hiện kết quả!
         </div>
       </div>
     </div>
@@ -161,19 +169,18 @@ function generateHTML(bookmarklet: string): string {
     <div class="features">
       <h2>✨ Tính năng</h2>
       <ul>
-        <li>Quét tất cả bài viết đang hiển thị trong group</li>
+        <li>Tự động scroll & quét tất cả bài viết trong group</li>
         <li>Lọc bài theo từ khoá bạn nhập (hỗ trợ nhiều từ khoá)</li>
-        <li>Tự động trích xuất <strong>số điện thoại</strong> từ nội dung bài viết</li>
+        <li>Tự động trích xuất <strong>số điện thoại</strong> từ nội dung</li>
         <li>Lấy <strong>link profile</strong> người đăng</li>
         <li>Lấy <strong>link bài viết</strong> gốc</li>
         <li>Xuất kết quả ra <strong>file Excel (.csv)</strong></li>
         <li>Popup hiển thị ngay trên Facebook, không rời trang</li>
-        <li>Không cần cài đặt, không cần tài khoản, không cần token</li>
       </ul>
     </div>
 
     <footer>
-      FB Group Search — Công cụ miễn phí · Mã nguồn trên GitHub
+      FB Group Search — Công cụ miễn phí · <a href="https://github.com/StrongDinh/fb-group-search" target="_blank">Mã nguồn GitHub</a>
     </footer>
   </div>
 </body>
