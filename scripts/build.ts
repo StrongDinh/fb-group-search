@@ -5,12 +5,12 @@ import * as path from "path";
 const SRC = path.resolve(__dirname, "../src/bookmarklet.ts");
 const OUT_DIR = path.resolve(__dirname, "../docs");
 const HTML_TEMPLATE = path.resolve(__dirname, "../docs/index.html");
+const JS_URL = "https://strongdinh.github.io/fb-group-search/bookmarklet.js";
 
 async function build() {
-  // Ensure output dir exists
   if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  // 1. Bundle & minify with esbuild
+  // 1. Bundle & minify
   console.log("Building bookmarklet...");
   const result = await esbuild.build({
     entryPoints: [SRC],
@@ -24,23 +24,23 @@ async function build() {
 
   const code = result.outputFiles![0].text;
 
-  // 2. Wrap as bookmarklet
-  const bookmarklet = "javascript:(function(){" + code + "})();";
-  console.log(`  Bookmarklet size: ${bookmarklet.length} chars`);
+  // 2. Write raw JS to docs/ (loaded dynamically by bookmarklet loader)
+  fs.writeFileSync(path.join(OUT_DIR, "bookmarklet.js"), code);
+  console.log(`  → docs/bookmarklet.js (${code.length} chars)`);
 
-  // 3. Write raw bookmarklet file
-  fs.writeFileSync(path.join(OUT_DIR, "bookmarklet.js"), bookmarklet);
-  console.log("  → docs/bookmarklet.js");
+  // 3. Short bookmarklet loader (~150 chars only)
+  const loader = `javascript:(function(){var s=document.createElement('script');s.src='${JS_URL}';document.body.appendChild(s);})();`;
+  console.log(`  Loader: ${loader.length} chars`);
 
   // 4. Generate index.html
-  const html = generateHTML(bookmarklet);
+  const html = generateHTML(loader);
   fs.writeFileSync(HTML_TEMPLATE, html);
   console.log("  → docs/index.html");
 
-  console.log("Done! Open docs/index.html to test.");
+  console.log("Done!");
 }
 
-function generateHTML(bookmarklet: string): string {
+function generateHTML(loader: string): string {
   return `<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -115,17 +115,14 @@ function generateHTML(bookmarklet: string): string {
 </head>
 <body>
   <div class="container">
-
-    <!-- Hero -->
     <div class="hero">
       <h1>🔍 FB Group Search</h1>
       <p>Quét bài viết Facebook Group, tìm khách hàng tiềm năng tự động</p>
     </div>
 
-    <!-- Bookmarklet -->
     <div class="bookmarklet-box">
       <h2>👉 Kéo nút này lên thanh Bookmarks</h2>
-      <a class="bookmarklet-btn" href="${bookmarklet}" onclick="return false;">
+      <a class="bookmarklet-btn" href="${loader}" onclick="return false;">
         🔍 Quét Group
       </a>
       <div class="drag-hint">
@@ -139,10 +136,8 @@ function generateHTML(bookmarklet: string): string {
       </div>
     </div>
 
-    <!-- How to use -->
     <div class="steps">
       <h2>📖 Cách sử dụng (chỉ 3 bước)</h2>
-
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-content">
@@ -150,7 +145,6 @@ function generateHTML(bookmarklet: string): string {
           (chỉ cần làm 1 lần duy nhất)
         </div>
       </div>
-
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-content">
@@ -158,7 +152,6 @@ function generateHTML(bookmarklet: string): string {
           Ví dụ: group thuê mặt bằng, group bất động sản, group mua bán...
         </div>
       </div>
-
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-content">
@@ -168,7 +161,6 @@ function generateHTML(bookmarklet: string): string {
       </div>
     </div>
 
-    <!-- Features -->
     <div class="features">
       <h2>✨ Tính năng</h2>
       <ul>
