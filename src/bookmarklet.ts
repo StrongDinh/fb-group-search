@@ -13,8 +13,7 @@
 
 (function () {
   "use strict";
-  console.log("%c[FB Group Search] Script loaded!", "color: green; font-size: 16px; font-weight: bold;");
-  console.log("[FB Group Search] Current URL:", window.location.href);
+  alert("[FB Group Search] Script đã chạy trên: " + window.location.href);
 
   // ── Configuration ──
   const DEFAULT_KEYWORDS = [

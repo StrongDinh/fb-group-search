@@ -15,8 +15,7 @@
   // src/bookmarklet.ts
   (function() {
     "use strict";
-    console.log("%c[FB Group Search] Script loaded!", "color: green; font-size: 16px; font-weight: bold;");
-    console.log("[FB Group Search] Current URL:", window.location.href);
+    alert("[FB Group Search] Script \u0111\xE3 ch\u1EA1y tr\xEAn: " + window.location.href);
     const DEFAULT_KEYWORDS = [
       "c\u1EA7n t\xECm",
       "c\u1EA7n thu\xEA",
