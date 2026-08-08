@@ -2,7 +2,7 @@
 // Flow: group page → nhập keywords → navigate search → click "Bài viết" filter → scroll hết → scrape
 
 const PHONE_REGEX = /(0[35789]\d{8,9})|(\+84\d{9,10})/g;
-const SCROLL_PAUSE = 2000;
+const SCROLL_PAUSE = 3000;  // slower to avoid FB rate-limiting
 const DK = ["cần tìm", "cần thuê", "cần mặt bằng", "cho thuê", "sang nhượng", "cần sang", "tìm mặt bằng", "thuê mặt bằng"];
 
 // Normalize Unicode digits (bold, fullwidth, etc.) → ASCII digits + strip phone separators
@@ -42,20 +42,26 @@ function getGroupId(): string {
 
 /* ── DOM-based Post extraction ── */
 
-// Facebook search result post container selector
-const POST_SEL = "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl";
-
 // 1. Search những node có "Bình luận" → xác định post (lấy hết tất cả)
 function getPosts(): Element[] {
-  const candidates = [...document.querySelectorAll(POST_SEL)];
-  const postCandidates = candidates.filter(el => {
-    const text = (el as HTMLElement).innerText || "";
-    return text.length > 200 && text.includes("·") && text.includes("Bình luận");
-  });
-  // Keep only innermost post containers
-  return postCandidates.filter(post =>
+  const allDivs = document.querySelectorAll("div");
+  const postCandidates: Element[] = [];
+
+  for (let i = 0; i < allDivs.length; i++) {
+    const el = allDivs[i];
+    const raw = (el as HTMLElement).textContent || "";
+    if (raw.length < 80) continue;
+    const text = cleanText(raw);
+    if (text.includes("·") && text.includes("Bình luận")) {
+      postCandidates.push(el);
+    }
+  }
+
+  const posts = postCandidates.filter(post =>
     !postCandidates.some(other => other !== post && post.contains(other))
   );
+  console.log("[FBGS] getPosts: " + postCandidates.length + " candidates → " + posts.length + " posts");
+  return posts;
 }
 
 // Strip Facebook's zero-width obfuscation chars (dùng cho keyword + phone matching)
@@ -71,35 +77,70 @@ function cleanText(s: string): string {
     .replace(/\s+/g, " ").trim();
 }
 
-// Strip FB UI chrome from cleaned innerText → just post body
-// cleanText đã xoá zero-width chars, làm lộ text ẩn "Facebook" của FB UI
-// Strip "Facebook" prefix + trailing FB patterns
-const _FB_SUFFIX_RE = /\s*(?:Xem thêm|Bình luận|Chia sẻ|Thích|Yêu thích|Thương thương|Phẫn nộ|buồn|haha|wow)\s*$/;
-const _FB_SUFFIX2_RE = /\s*\d+\s+Bình luận\b.*/;
-const _FB_SUFFIX3_RE = /\s*\d+\s+lượt (?:chia sẻ|bình luận)\b.*/;
-const _FB_SUFFIX4_RE = /\s*dưới tên\s+\S+.*/;
-
+// Strip FB UI chrome from textContent — conservative, never use .* that eats phone numbers
 function stripFBChrome(s: string): string {
   let t = s;
-  // 1. Strip leading "Facebook " repetitions (FB zero-width chars now collapsed)
-  while (t.startsWith("Facebook ")) {
-    t = t.slice("Facebook ".length);
-  }
-  // 2. Strip FB share header: "Đã chia sẻ với ... Nhóm công khai", "Đã chia sẻ bài viết của ...", etc.
-  t = t.replace(/^Đã chia sẻ (?:với|bài viết của)[^.]*?\.?\s*/u, "");
-  // 3. Find " · " separator (between time & post body). Take everything after LAST " · "
+
+  // 1. Strip leading "Facebook " repetitions
+  while (t.startsWith("Facebook ")) t = t.slice("Facebook ".length);
+
+  // 2. Find " · " separator (time marker) → keep everything after (post body area)
   const dotIdx = t.lastIndexOf(" · ");
-  if (dotIdx !== -1) {
-    t = t.slice(dotIdx + 3);
+  if (dotIdx !== -1) t = t.slice(dotIdx + 3);
+
+  // 3. Strip FB share header (now at position 0 after step 2 slice)
+  t = t.replace(/^Đã chia sẻ (?:với Nhóm công khai|bài viết của \S+)\s*/u, "");
+
+  // 4. Xoá "… Xem thêm" nhưng GIỮ text phía sau (chứa SĐT bị FB ẩn)
+  t = t.replace(/…\s*Xem thêm\s*/gu, " ");
+  // 5. Xoá "… Xem Ảnh từ bài viết của Tên Hash" — name can be 1-3 words, followed by hash
+  //     Pattern: ...Xem Ảnh từ bài viết của FirstName [LastName [Nickname]] HashString
+  t = t.replace(/(?:…\s*)?Xem Ảnh từ bài viết của\s+\S+(?:\s+\S+){0,3}\s*/gu, " ");
+
+  // 6. Cắt tại "N Bình luận" — N luôn là số nhỏ 1-3 chữ số (không phải SĐT)
+  const cmtIdx = t.search(/\b\d{1,3}\s*(?:Bình luận|lượt chia sẻ|lượt thích|lượt xem)\b/);
+  if (cmtIdx !== -1) t = t.slice(0, cmtIdx);
+
+  // 7. Cắt tại "dưới tên XXX" — đây cũng là cuối
+  const underIdx = t.search(/dưới tên\s+\S+/u);
+  if (underIdx !== -1) t = t.slice(0, underIdx);
+
+  // 8. Strip long random hash strings (FB tracking, 20+ chars alphanumeric)
+  t = t.replace(/\s+[A-Za-z0-9_-]{20,}\s*/g, " ");
+
+  // 9. Strip URL artifacts
+  t = t.replace(/\S+\.com\b/g, "");
+
+  // 10. Strip obfuscated "Learn More" remnants: any sequence of dashes + scattered letters
+  //     Patterns: "-----M---or-e--", "ar ore-----", "----L n -M--o", "o-r-e", "ar---n- M o-r-e-"
+  t = t.replace(/\s*[A-Za-z\s]*[-]{2,}[A-Za-z\s-]*[-]{2,}[A-Za-z\s-]*\s*/g, " ");
+
+  // 11. Strip trailing "Bình luận" without digit prefix (remnant after obfuscation strip)
+  t = t.replace(/\s*Bình luận\s*$/u, "");
+
+  // 12. Strip trailing FB reaction words (Chia sẻ, Thích, etc.) at the very end
+  t = t.replace(/\s*(?:Xem thêm|Chia sẻ|Thích|Yêu thích|Thương thương|Phẫn nộ|buồn|haha|wow)\s*$/u, "");
+
+  return t.replace(/\s+/g, " ").trim();
+}
+
+// Click all "Xem thêm" buttons inside postEl → reveal hidden content
+// Returns number of buttons clicked
+function expandPost(postEl: Element): number {
+  let clicked = 0;
+  const btns = postEl.querySelectorAll('[role="button"]');
+  for (let i = 0; i < btns.length; i++) {
+    const btn = btns[i];
+    const txt = (btn as HTMLElement).innerText || "";
+    // innerText normalizes away FB's zero-width obfuscation chars
+    if (txt.trim() === "Xem thêm" || txt.trim() === "See more") {
+      try {
+        (btn as HTMLElement).click();
+        clicked++;
+      } catch (_) { /* ignore */ }
+    }
   }
-  // 4. Strip trailing FB chrome
-  t = t.replace(_FB_SUFFIX_RE, "");
-  t = t.replace(_FB_SUFFIX2_RE, "");
-  t = t.replace(_FB_SUFFIX3_RE, "");
-  t = t.replace(_FB_SUFFIX4_RE, "");
-  // 5. Strip remaining FB URL artifacts (like "FdBkzQ.com" etc.)
-  t = t.replace(/\S+\.com\b/g, "").replace(/\s+/g, " ");
-  return t.trim();
+  return clicked;
 }
 
 // 2. Lấy permalink từ <a href>
@@ -127,12 +168,26 @@ function extractPermalink(postEl: Element, groupId: string): string {
     if (m) return "https://www.facebook.com/groups/" + groupId + "/permalink/" + m[1] + "/";
   }
 
-  // Priority 3: scan innerHTML
+  // Priority 3: scan innerHTML for additional FB post ID patterns
   const html = postEl.innerHTML;
   let m = html.match(/set=gm\.(\d+)/);
   if (m) return "https://www.facebook.com/groups/" + groupId + "/permalink/" + m[1] + "/";
   m = html.match(/set=pcb\.(\d+)/);
   if (m) return "https://www.facebook.com/groups/" + groupId + "/permalink/" + m[1] + "/";
+  m = html.match(/story_fbid[=:](\d+)/);
+  if (m) return "https://www.facebook.com/groups/" + groupId + "/permalink/" + m[1] + "/";
+  m = html.match(/top_level_post_id[=:](\d+)/);
+  if (m) return "https://www.facebook.com/groups/" + groupId + "/permalink/" + m[1] + "/";
+  m = html.match(/ft_ent_identifier[=:](\d+)/);
+  if (m) return "https://www.facebook.com/groups/" + groupId + "/posts/" + m[1] + "/";
+
+  // Priority 4: any link to same group that looks like a post
+  for (const a of links) {
+    const href = a.getAttribute("href") || "";
+    // Match /groups/ID/permalink/XXX or /groups/ID/posts/XXX
+    m = href.match(/\/groups\/\d+\/(?:permalink|posts)\/(\d+)/);
+    if (m) return "https://www.facebook.com/groups/" + groupId + "/permalink/" + m[1] + "/";
+  }
 
   return "";
 }
@@ -223,13 +278,25 @@ function createOverlay() {
     '<div id="fbgs-body" style="flex:1;overflow-y:auto;padding:8px;"></div>' +
     '<div id="fbgs-footer" style="padding:12px 16px;border-top:1px solid #eee;text-align:center;font-size:13px;color:#65676b;flex-shrink:0;"></div>';
   document.body.appendChild(ov);
-  document.getElementById("fbgs-close")!.onclick = () => rem("fbgs-overlay");
+  // ✕ close button: abort scan + clear sessionStorage so F5 won't re-scan
+  document.getElementById("fbgs-close")!.onclick = () => {
+    (ov as any).__fbgs_aborted = true;
+    sessionStorage.removeItem("fbgs_should_scan");
+    rem("fbgs-overlay");
+  };
   return ov;
 }
 
 function progress(ov: HTMLElement, msg: string) {
   ov.querySelector("#fbgs-body")!.innerHTML =
     '<div style="text-align:center;padding:40px;color:#65676b;"><div style="font-size:32px;margin-bottom:12px;">⏳</div><div>' + msg + '</div></div>';
+  // Add "Dừng quét" button
+  const ft = ov.querySelector("#fbgs-footer")!;
+  ft.innerHTML =
+    '<button id="fbgs-stop-btn" style="padding:10px 24px;background:#e74c3c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">⏹ Dừng quét</button>';
+  document.getElementById("fbgs-stop-btn")!.onclick = () => {
+    (ov as any).__fbgs_aborted = true;
+  };
 }
 
 function render(ov: HTMLElement, results: Result[], kws: string[]) {
@@ -267,18 +334,46 @@ function render(ov: HTMLElement, results: Result[], kws: string[]) {
     '<button id="fbgs-dl" style="padding:10px 24px;background:#42b72a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">📥 Tải Excel</button>' +
     '<button id="fbgs-retry" style="padding:10px 24px;background:#1877f2;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;margin-left:8px;">🔄 Quét lại</button>';
   document.getElementById("fbgs-dl")!.onclick = () => exportCSV(results);
-  document.getElementById("fbgs-retry")!.onclick = () => { rem("fbgs-overlay"); kwModal(); };
+  document.getElementById("fbgs-retry")!.onclick = () => {
+    rem("fbgs-overlay");
+    sessionStorage.setItem("fbgs_kws", JSON.stringify(kws));
+    sessionStorage.setItem("fbgs_should_scan", "1");
+    window.location.reload();
+  };
 }
 
 function exportCSV(results: Result[]) {
   const BOM = "﻿";
   const hdrs = ["STT", "Từ khoá", "Người đăng", "Link Profile", "SĐT", "Link bài viết", "Nội dung", "Thời gian"];
-  const rows = results.map((r, i) => [
-    String(i + 1), r.keyword, r.authorName, r.authorProfile,
-    r.phones.map(p => "\t" + p).join("; "),  // tab prefix — Excel keeps leading 0
-    r.permalink, r.content.replace(/[\n\r]+/g, " "), r.time
-  ]);
-  const csv = BOM + [hdrs].concat(rows).map(row => row.map(c => '"' + ((c || "").replace(/"/g, '""')) + '"').join(",")).join("\n");
+
+  function esc(v: string): string {
+    if (!v) return '""';
+    return '"' + v.replace(/"/g, '""') + '"';
+  }
+
+  // Build CSV — phone column uses ="number" format so Excel preserves leading zeros
+  const lines: string[] = [];
+  lines.push(hdrs.map(esc).join(","));
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    const phonesVal = r.phones.length > 0
+      ? esc('="' + r.phones.join("; ") + '"')  // ="number" → Excel keeps leading 0
+      : '""';
+    const row = [
+      esc(String(i + 1)),
+      esc(r.keyword),
+      esc(r.authorName),
+      esc(r.authorProfile),
+      phonesVal,  // ="08177675635" format → Excel treats as text
+      esc(r.permalink),
+      esc(r.content.replace(/[\n\r]+/g, " ")),
+      esc(r.time),
+    ];
+    lines.push(row.join(","));
+  }
+
+  const csv = BOM + lines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
   a.download = "fb-group-results-" + new Date().toISOString().slice(0, 10) + ".csv"; a.click();
@@ -319,38 +414,74 @@ async function runOnSearch(kwsOverride?: string[]) {
   const results: Result[] = [];
 
   let stableCount = 0;
+  let emptyCount = 0;
   let scrollCount = 0;
+  let prevPageHeight = document.body.scrollHeight;
+  const MAX_STABLE = 12;  // kiên nhẫn hơn, FB load chậm
 
-  while (stableCount < 5 && scrollCount < 200) {
+  while (stableCount < MAX_STABLE && scrollCount < 300) {
+    if ((ov as any).__fbgs_aborted) {
+      console.log("[FBGS] === ABORTED at round " + scrollCount + " ===");
+      break;
+    }
+
+    // ── Khi stable ≥ 4: scrollTo bottom để re-trigger FB infinite scroll ──
+    if (stableCount >= 4 && stableCount % 2 === 0) {
+      console.log("[FBGS] → scrollTo bottom (stable=" + stableCount + ")");
+      window.scrollTo(0, document.body.scrollHeight);
+      await sleep(SCROLL_PAUSE + 2000);
+      // Then scroll up slightly so next scrollBy has room
+      window.scrollBy(0, -window.innerHeight * 0.3);
+    }
+
     // ── 1. Search node có "Bình luận" → xác định post ──
     const currentPosts = getPosts();
     let newInThisRound = 0;
 
+    // candidates=0 → scroll to bottom, không tính stableCount
+    if (currentPosts.length === 0) {
+      emptyCount++;
+      console.log("[FBGS] ⚠️ 0 candidates (emptyCount=" + emptyCount + ")");
+      if (emptyCount >= 3) {
+        console.log("[FBGS] Scrolling back up to reload posts...");
+        window.scrollBy(0, -window.innerHeight * 2);
+        await sleep(3000);
+        emptyCount = 0;
+        scrollCount++;
+        continue;
+      }
+      await sleep(3000);
+      scrollCount++;
+      continue;
+    }
+    emptyCount = 0;
+
     for (let i = 0; i < currentPosts.length; i++) {
+      if ((ov as any).__fbgs_aborted) break;
       const postEl = currentPosts[i];
 
-      // ── 2. Lấy textContent (bao gồm cả text ẩn sau "Xem thêm") ──
+      // ── 2. Expand "… Xem thêm" nếu có ──
+      const hasSeeMore = ((postEl as HTMLElement).innerText || "").includes("Xem thêm");
+      if (hasSeeMore) {
+        const clicked = expandPost(postEl);
+        if (clicked > 0) await sleep(500); // đợi FB render text mới
+      }
+
+      // ── 3. Lấy textContent (sau khi expand) ──
       const rawText = (postEl as HTMLElement).textContent || "";
 
-      // ── 3. Lấy <a href> → permalink ──
+      // ── 3. Lấy permalink ──
       const permalink = extractPermalink(postEl, groupId);
-
-      // Bỏ qua post đã xử lý
-      if (!permalink || seenPermalinks.has(permalink)) continue;
-      seenPermalinks.add(permalink);
+      const dedupeKey = permalink || rawText.slice(0, 80);
+      if (seenPermalinks.has(dedupeKey)) continue;
+      seenPermalinks.add(dedupeKey);
       newInThisRound++;
 
-      // Clean text cho phone regex + content
       const cleanedText = cleanText(rawText);
-
-      // ── 4. Regex phone ──
       const phones = extractPhones(cleanedText);
-
-      // ── Lấy author + time ──
       const author = extractAuthor(postEl, groupId);
       const time = extractTime(cleanedText);
 
-      // ── 5. Lưu kết quả (lấy hết sạch, không lọc keyword) ──
       results.push({
         keyword: kws.join(", "),
         authorName: author.name || "(không rõ)",
@@ -361,25 +492,33 @@ async function runOnSearch(kwsOverride?: string[]) {
         time: time || "",
       });
 
-      // Debug first 5
       if (results.length <= 5) {
         console.log("[FBGS] #" + results.length + " author=" + author.name + " phones=" + phones.join(",") + " permalink=" + permalink.slice(0, 60));
         console.log("  raw[" + rawText.length + "]: " + rawText.slice(0, 200));
-        const stripped = stripFBChrome(cleanedText);
-        console.log("  content[" + stripped.length + "]: " + stripped.slice(0, 250));
+        console.log("  content[" + stripFBChrome(cleanedText).length + "]: " + stripFBChrome(cleanedText).slice(0, 250));
       }
     }
 
     // ── Update stable count ──
-    if (newInThisRound === 0) stableCount++;
-    else stableCount = 0;
+    const newHeight = document.body.scrollHeight;
+    const pageGrew = newHeight > prevPageHeight + 200;
+
+    if (newInThisRound === 0) {
+      stableCount++;
+      if (pageGrew) { stableCount = 0; }
+    } else {
+      stableCount = 0;
+    }
+    prevPageHeight = newHeight;
 
     scrollCount++;
-    progress(ov, "Đang quét... (scroll " + scrollCount + ", " + results.length + " bài, " + seenPermalinks.size + " tổng)");
+    console.log("[FBGS] Round " + scrollCount + ": posts=" + currentPosts.length + " new=" + newInThisRound + " total=" + seenPermalinks.size + " results=" + results.length + " stable=" + stableCount + "/" + MAX_STABLE + " grew=" + pageGrew);
+    progress(ov, "Đang quét... (scroll " + scrollCount + ", " + results.length + " bài)");
 
-    // ── 7. Scroll để load DOM mới ──
-    window.scrollTo(0, document.body.scrollHeight);
+    // ── 7. Scroll từng bước nhỏ ──
+    window.scrollBy(0, window.innerHeight * 0.8);
     await sleep(SCROLL_PAUSE);
+    await sleep(500);
   }
 
   console.log("[FBGS] === DONE: " + results.length + " matched / " + seenPermalinks.size + " posts / " + scrollCount + " scrolls ===");
