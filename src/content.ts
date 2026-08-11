@@ -26,41 +26,69 @@ function extractPhones(t: string): string[] {
   PHONE_REGEX.lastIndex = 0;
   return [...new Set(phones)];
 }
-function matchKw(t: string, kws: string[]): string | null {
-  const lo = t.toLowerCase();
-  for (const kw of kws) { if (lo.includes(kw.toLowerCase().trim())) return kw; }
-  return null;
+function matchKw(t: string, kw: string): boolean {
+  return t.toLowerCase().includes(kw.toLowerCase().trim());
 }
 function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
 function esc(s: string): string { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 function ct(s: string): string { return s.replace(/\s+/g, " ").trim(); }
 
 function getGroupId(): string {
-  const m = window.location.pathname.match(/\/groups\/(\d+)/);
+  const m = window.location.pathname.match(/\/groups\/([^/?]+)/);
   return m ? m[1] : "";
 }
 
 /* ── DOM-based Post extraction ── */
 
 // 1. Search những node có "Bình luận" → xác định post (lấy hết tất cả)
+// Luôn chạy cả 3 phương pháp song song để bắt được mọi loại post
 function getPosts(): Element[] {
   const allDivs = document.querySelectorAll("div");
-  const postCandidates: Element[] = [];
+  const seen = new Set<Element>();
 
+  // Method 1: "·" + "Bình luận" text pattern
   for (let i = 0; i < allDivs.length; i++) {
     const el = allDivs[i];
     const raw = (el as HTMLElement).textContent || "";
     if (raw.length < 80) continue;
     const text = cleanText(raw);
     if (text.includes("·") && text.includes("Bình luận")) {
-      postCandidates.push(el);
+      seen.add(el);
     }
   }
 
-  const posts = postCandidates.filter(post =>
-    !postCandidates.some(other => other !== post && post.contains(other))
+  // Method 2: data-ad-rendering-role="story_message" (bắt post text-only, ẩn danh)
+  const storyMsgDivs = document.querySelectorAll('[data-ad-rendering-role="story_message"]');
+  for (let i = 0; i < storyMsgDivs.length; i++) {
+    let el: Element | null = storyMsgDivs[i] as Element;
+    for (let depth = 0; depth < 4 && el; depth++) { el = el.parentElement; }
+    if (el) {
+      const txt = (el as HTMLElement).textContent || "";
+      if (txt.length >= 80) seen.add(el);
+    }
+  }
+
+  // Method 3: permalink/post links (bắt mọi post có link)
+  const allLinks = document.querySelectorAll("a[href]");
+  for (let i = 0; i < allLinks.length; i++) {
+    const href = allLinks[i].getAttribute("href") || "";
+    if (!/\/groups\/[^/]+\/(?:permalink|posts)\//.test(href)) continue;
+    let best: Element | null = null;
+    let el: Element | null = allLinks[i];
+    for (let d = 0; d < 15 && el; d++) {
+      const txt = (el as HTMLElement).textContent || "";
+      if (txt.length >= 60) best = el;
+      el = el.parentElement;
+    }
+    if (best) seen.add(best);
+  }
+
+  // Remove containers that are nested inside others (keep outermost)
+  const candidates = [...seen];
+  const posts = candidates.filter(post =>
+    !candidates.some(other => other !== post && post.contains(other))
   );
-  console.log("[FBGS] getPosts: " + postCandidates.length + " candidates → " + posts.length + " posts");
+  console.log("[FBGS] getPosts: " + candidates.length + " candidates → " + posts.length + " posts");
   return posts;
 }
 
@@ -148,9 +176,10 @@ function extractPermalink(postEl: Element, groupId: string): string {
   const links = [...postEl.querySelectorAll("a[href]")];
 
   // Priority 1: explicit /posts/ or /permalink/ links
+  const groupIdEscaped = groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const a of links) {
     const href = a.getAttribute("href") || "";
-    if (/\/groups\/\d+\/(?:posts|permalink)\//.test(href)) {
+    if (new RegExp("/groups/" + groupIdEscaped + "/(?:posts|permalink)/").test(href)) {
       return href.startsWith("http") ? href.split("?")[0] : "https://www.facebook.com" + href.split("?")[0];
     }
   }
@@ -185,7 +214,7 @@ function extractPermalink(postEl: Element, groupId: string): string {
   for (const a of links) {
     const href = a.getAttribute("href") || "";
     // Match /groups/ID/permalink/XXX or /groups/ID/posts/XXX
-    m = href.match(/\/groups\/\d+\/(?:permalink|posts)\/(\d+)/);
+    m = new RegExp("/groups/" + groupIdEscaped + "/(?:permalink|posts)/(\\d+)").exec(href);
     if (m) return "https://www.facebook.com/groups/" + groupId + "/permalink/" + m[1] + "/";
   }
 
@@ -194,6 +223,12 @@ function extractPermalink(postEl: Element, groupId: string): string {
 
 // 3. Lấy author từ <a href> pattern
 function extractAuthor(postEl: Element, groupId: string): { name: string; profile: string } {
+  // Check for anonymous post
+  const rawText = (postEl as HTMLElement).textContent || "";
+  if (/Người tham gia ẩn danh|Anonymous participant/i.test(rawText)) {
+    return { name: "Người tham gia ẩn danh", profile: "" };
+  }
+
   const links = [...postEl.querySelectorAll("a[href]")];
   for (const a of links) {
     const href = a.getAttribute("href") || "";
@@ -246,9 +281,9 @@ function kwModal() {
   mo.style.cssText = "background:#fff;border-radius:12px;padding:24px;width:420px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.2);font-family:system-ui,sans-serif;";
   mo.innerHTML =
     '<div style="font-size:18px;font-weight:700;margin-bottom:8px;">🔍 Quét bài viết trong Group</div>' +
-    '<div style="font-size:13px;color:#65676b;margin-bottom:12px;">Nhập từ khoá, phân cách bởi dấu phẩy (,)</div>' +
+    '<div style="font-size:13px;color:#65676b;margin-bottom:12px;">Nhập từ khoá tìm kiếm</div>' +
     '<input id="fbgs-kw-input" type="text" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box;" ' +
-    'placeholder="VD: ' + esc(DK.join(", ")) + '" />' +
+    'placeholder="VD: quán phở ngon" />' +
     '<div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">' +
     '<button id="fbgs-cancel-btn" style="padding:10px 20px;background:#e4e6eb;color:#1c1e21;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;">Huỷ</button>' +
     '<button id="fbgs-start-btn" style="padding:10px 20px;background:#1877f2;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;">🚀 Bắt đầu quét</button></div>';
@@ -261,7 +296,7 @@ function kwModal() {
     const raw = inp.value.trim();
     if (!raw) { inp.style.borderColor = "#e74c3c"; inp.focus(); return; }
     rem("fbgs-modal-overlay");
-    startSearch(raw.split(",").map(k => k.trim()).filter(k => k.length > 0));
+    startSearch(raw);
   };
   inp.onkeydown = (e) => { if (e.key === "Enter") document.getElementById("fbgs-start-btn")!.click(); };
   setTimeout(() => inp.focus(), 100);
@@ -299,7 +334,7 @@ function progress(ov: HTMLElement, msg: string) {
   };
 }
 
-function render(ov: HTMLElement, results: Result[], kws: string[]) {
+function render(ov: HTMLElement, results: Result[], kw: string) {
   const body = ov.querySelector("#fbgs-body")!;
   const ft = ov.querySelector("#fbgs-footer")!;
   if (results.length === 0) {
@@ -307,7 +342,7 @@ function render(ov: HTMLElement, results: Result[], kws: string[]) {
       '<div style="text-align:center;padding:40px;color:#65676b;">' +
       '<div style="font-size:32px;margin-bottom:12px;">😕</div>' +
       '<div>Không tìm thấy bài nào khớp.</div>' +
-      '<div style="margin-top:8px;font-size:12px;">Từ khoá: ' + esc(kws.join(", ")) + '</div>' +
+      '<div style="margin-top:8px;font-size:12px;">Từ khoá: ' + esc(kw) + '</div>' +
       '<div style="margin-top:8px;font-size:12px;color:#999;">💡 Mẹo: thử từ khoá ngắn hơn<br>Mở Console (F12) để xem log [FBGS]</div>' +
       '</div>';
     ft.innerHTML =
@@ -315,7 +350,7 @@ function render(ov: HTMLElement, results: Result[], kws: string[]) {
     document.getElementById("fbgs-retry")!.onclick = () => { rem("fbgs-overlay"); kwModal(); };
     return;
   }
-  let html = '<div style="font-weight:700;margin-bottom:8px;font-size:13px;">🔍 ' + esc(kws.join(", ")) + ' | 📊 <span style="color:#1877f2;">' + results.length + '</span> kết quả</div>';
+  let html = '<div style="font-weight:700;margin-bottom:8px;font-size:13px;">🔍 ' + esc(kw) + ' | 📊 <span style="color:#1877f2;">' + results.length + '</span> kết quả</div>';
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     html += '<div style="border:1px solid #e4e6eb;border-radius:8px;padding:10px;margin-bottom:8px;font-size:13px;">';
@@ -336,7 +371,7 @@ function render(ov: HTMLElement, results: Result[], kws: string[]) {
   document.getElementById("fbgs-dl")!.onclick = () => exportCSV(results);
   document.getElementById("fbgs-retry")!.onclick = () => {
     rem("fbgs-overlay");
-    sessionStorage.setItem("fbgs_kws", JSON.stringify(kws));
+    sessionStorage.setItem("fbgs_kw", kw);
     sessionStorage.setItem("fbgs_should_scan", "1");
     window.location.reload();
   };
@@ -380,12 +415,12 @@ function exportCSV(results: Result[]) {
 }
 
 /* ── Navigate to search ── */
-function startSearch(kws: string[]) {
+function startSearch(kw: string) {
   const groupId = getGroupId();
   if (!groupId) { alert("❌ Không tìm thấy Group ID."); return; }
-  const q = encodeURIComponent(kws.join(" "));
+  const q = encodeURIComponent(kw);
   const url = "https://www.facebook.com/groups/" + groupId + "/search/?q=" + q;
-  sessionStorage.setItem("fbgs_kws", JSON.stringify(kws));
+  sessionStorage.setItem("fbgs_kw", kw);
   sessionStorage.setItem("fbgs_should_scan", "1");
   console.log("[FBGS] → " + url);
   window.location.href = url;
@@ -395,16 +430,15 @@ function startSearch(kws: string[]) {
    Flow: DOM hiện tại → search node có "Bình luận" → xác định post
          → lấy innerText → lấy <a href> → regex phone → lưu kết quả
          → scroll → DOM mới → lặp lại */
-async function runOnSearch(kwsOverride?: string[]) {
-  let kws: string[];
-  if (kwsOverride && kwsOverride.length > 0) {
-    kws = kwsOverride;
+async function runOnSearch(kwOverride?: string) {
+  let kw: string;
+  if (kwOverride) {
+    kw = kwOverride;
   } else {
-    const raw = sessionStorage.getItem("fbgs_kws");
-    if (!raw) return;
-    kws = JSON.parse(raw);
+    kw = sessionStorage.getItem("fbgs_kw") || "";
+    if (!kw) return;
   }
-  console.log("[FBGS] === SEARCH: " + kws.join(", ") + " ===");
+  console.log("[FBGS] === SEARCH: " + kw + " ===");
 
   const ov = createOverlay();
   progress(ov, "Đang phân tích trang...");
@@ -472,30 +506,35 @@ async function runOnSearch(kwsOverride?: string[]) {
 
       // ── 3. Lấy permalink ──
       const permalink = extractPermalink(postEl, groupId);
-      const dedupeKey = permalink || rawText.slice(0, 80);
+
+      // Dedup: dùng permalink nếu có, nếu không thì hash nội dung (tránh trùng "Facebook..." prefix)
+      const cleanedText = cleanText(rawText);
+      const contentSnippet = stripFBChrome(cleanedText).slice(0, 200);
+      const dedupeKey = permalink || "hash:" + contentSnippet;
       if (seenPermalinks.has(dedupeKey)) continue;
       seenPermalinks.add(dedupeKey);
       newInThisRound++;
 
-      const cleanedText = cleanText(rawText);
       const phones = extractPhones(cleanedText);
       const author = extractAuthor(postEl, groupId);
       const time = extractTime(cleanedText);
 
+      const content = stripFBChrome(cleanedText);
+
       results.push({
-        keyword: kws.join(", "),
+        keyword: kw,
         authorName: author.name || "(không rõ)",
         authorProfile: author.profile || "",
         permalink,
         phones,
-        content: stripFBChrome(cleanedText),
+        content,
         time: time || "",
       });
 
       if (results.length <= 5) {
         console.log("[FBGS] #" + results.length + " author=" + author.name + " phones=" + phones.join(",") + " permalink=" + permalink.slice(0, 60));
         console.log("  raw[" + rawText.length + "]: " + rawText.slice(0, 200));
-        console.log("  content[" + stripFBChrome(cleanedText).length + "]: " + stripFBChrome(cleanedText).slice(0, 250));
+        console.log("  content[" + content.length + "]: " + content.slice(0, 250));
       }
     }
 
@@ -523,7 +562,7 @@ async function runOnSearch(kwsOverride?: string[]) {
 
   console.log("[FBGS] === DONE: " + results.length + " matched / " + seenPermalinks.size + " posts / " + scrollCount + " scrolls ===");
   sessionStorage.removeItem("fbgs_should_scan");
-  render(ov, results, kws);
+  render(ov, results, kw);
 }
 
 /* ── Init ── */
@@ -545,13 +584,13 @@ async function runOnSearch(kwsOverride?: string[]) {
       b.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:999998;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#ff6b35,#f7c948);color:#fff;font-size:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 16px rgba(255,107,53,0.5);transition:transform 0.2s;user-select:none;";
       b.textContent = "🔄";
       b.onclick = () => {
-        const raw = prompt("Nhập từ khoá (phân cách bởi dấu phẩy):", sessionStorage.getItem("fbgs_kws")?.replace(/[\[\]"]/g, "") || "");
+        const raw = prompt("Nhập từ khoá:", sessionStorage.getItem("fbgs_kw") || "");
         if (!raw) return;
-        runOnSearch(raw.split(",").map(k => k.trim()).filter(k => k.length > 0));
+        runOnSearch(raw.trim());
       };
       document.body.appendChild(b);
     }, 2000);
-  } else if (path.match(/\/groups\/\d+/) && !isSearch) {
+  } else if (path.match(/\/groups\/[^/?]+/) && !isSearch) {
     fab();
   }
 })();
@@ -565,7 +604,7 @@ new MutationObserver(() => {
     const shouldScan = sessionStorage.getItem("fbgs_should_scan") === "1";
     if (isSearch && shouldScan) {
       setTimeout(() => runOnSearch(), 2500);
-    } else if (path.match(/\/groups\/\d+/) && !isSearch) {
+    } else if (path.match(/\/groups\/[^/?]+/) && !isSearch) {
       fab();
     } else {
       rem("fbgs-fab");
